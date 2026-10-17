@@ -1,3 +1,8 @@
+//Made by Ilam
+//All code is made by me
+//This is used for making Secret Santas with your friends
+//Have fun!
+
 use rand::seq::SliceRandom;
 use std::io;
 

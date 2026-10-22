@@ -8,6 +8,12 @@ use std::io::{self, BufRead, Write};
 
 const END_KEYWORD: &str = "END";
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Formatted {
+    giver: String,
+    to: String,
+}
+
 fn main() {
     println!();
     println!("!Enter one name per line. Type {END_KEYWORD} when you're done!");
@@ -27,7 +33,7 @@ fn main() {
         return;
     }
 
-    let assignments = assign_secret_santas(&names);
+    let assignments = shuffle_assignments(assign_secret_santas(&names));
     reveal_assignments(&assignments);
 }
 
@@ -74,37 +80,42 @@ fn read_names_from<R: BufRead>(reader: &mut R) -> Result<Vec<String>, String> {
     Ok(names)
 }
 
-fn assign_secret_santas(names: &[String]) -> Vec<(String, String)> {
+fn assign_secret_santas(names: &[String]) -> Vec<Formatted> {
     let mut givers: Vec<&String> = names.iter().collect();
     givers.shuffle(&mut rand::rng());
 
     givers
         .iter()
         .enumerate()
-        .map(|(index, giver)| {
-            let recipient = givers[(index + 1) % givers.len()];
-            ((*giver).clone(), recipient.clone())
+        .map(|(index, giver)| Formatted {
+            giver: (*giver).clone(),
+            to: givers[(index + 1) % givers.len()].clone(),
         })
         .collect()
 }
 
-fn reveal_assignments(assignments: &[(String, String)]) {
+fn shuffle_assignments(mut assignments: Vec<Formatted>) -> Vec<Formatted> {
+    assignments.shuffle(&mut rand::rng());
+    assignments
+}
+
+fn reveal_assignments(assignments: &[Formatted]) {
     println!();
     println!("Assignments are ready.");
     println!("Pass the computer to each person in turn.");
     println!("Only that person's recipient will be shown.");
     wait_for_enter("Press Enter to start.");
 
-    for (giver, recipient) in assignments {
+    for assignment in assignments {
         clear_screen();
-        println!("Pass the computer to {giver}.");
+        println!("Pass the computer to {}.", assignment.giver);
         wait_for_enter("Press Enter when they are ready to see their recipient.");
 
         clear_screen();
         println!();
-        println!("{giver}, your Secret Santa recipient is:");
+        println!("{}, your Secret Santa recipient is:", assignment.giver);
         println!();
-        println!("    {recipient}");
+        println!("    {}", assignment.to);
         println!();
         wait_for_enter("Press Enter to hide this and pass the computer on.");
     }
@@ -177,17 +188,19 @@ mod tests {
                 assert_eq!(assignments.len(), count);
 
                 let mut recipient_by_giver: HashMap<String, String> = HashMap::new();
-                for (giver, recipient) in &assignments {
-                    assert_ne!(giver, recipient);
+                for assignment in &assignments {
+                    assert_ne!(assignment.giver, assignment.to);
                     assert!(
                         recipient_by_giver
-                            .insert(giver.clone(), recipient.clone())
+                            .insert(assignment.giver.clone(), assignment.to.clone())
                             .is_none()
                     );
                 }
 
-                let unique_recipients: HashSet<&String> =
-                    assignments.iter().map(|(_, recipient)| recipient).collect();
+                let unique_recipients: HashSet<&String> = assignments
+                    .iter()
+                    .map(|assignment| &assignment.to)
+                    .collect();
                 assert_eq!(unique_recipients.len(), count);
             }
         }
@@ -199,7 +212,10 @@ mod tests {
             for _ in 0..200 {
                 let people = names(count);
                 let assignments = assign_secret_santas(&people);
-                let recipient_by_giver: HashMap<String, String> = assignments.into_iter().collect();
+                let recipient_by_giver: HashMap<String, String> = assignments
+                    .into_iter()
+                    .map(|assignment| (assignment.giver, assignment.to))
+                    .collect();
 
                 let start = people[0].clone();
                 let mut current = start.clone();
@@ -218,10 +234,27 @@ mod tests {
     #[test]
     fn two_people_swap() {
         let people = names(2);
-        let assignments: HashMap<String, String> =
-            assign_secret_santas(&people).into_iter().collect();
+        let assignments: HashMap<String, String> = assign_secret_santas(&people)
+            .into_iter()
+            .map(|assignment| (assignment.giver, assignment.to))
+            .collect();
 
         assert_eq!(assignments.get("Person0"), Some(&"Person1".to_string()));
         assert_eq!(assignments.get("Person1"), Some(&"Person0".to_string()));
+    }
+
+    #[test]
+    fn shuffle_preserves_assignments() {
+        let people = names(8);
+        let assignments = assign_secret_santas(&people);
+        let mut expected = assignments.clone();
+        expected.sort_by(|left, right| left.giver.cmp(&right.giver));
+
+        let shuffled = shuffle_assignments(assignments);
+        let mut actual = shuffled.clone();
+        actual.sort_by(|left, right| left.giver.cmp(&right.giver));
+
+        assert_eq!(actual, expected);
+        assert_eq!(shuffled.len(), people.len());
     }
 }

@@ -4,67 +4,224 @@
 //Have fun!
 
 use rand::seq::SliceRandom;
-use std::io;
+use std::io::{self, BufRead, Write};
 
 const END_KEYWORD: &str = "END";
 
-struct Person {
-    name: String,
-    giving_to: Option<String>,
-}
-
 fn main() {
     println!();
-    let mut list_of_people: Vec<Person> = Vec::new();
     println!("!Enter one name per line. Type {END_KEYWORD} when you're done!");
-    println!("Print a list of people: ");
+    println!("Enter a list of people:");
     println!("{}", "-".repeat(50));
-    let succes = get_all_people_input(&END_KEYWORD, &mut list_of_people);
-    if !succes {
-        eprintln!("You inputed one empty name.");
-        return;
-    }
-    if list_of_people.len() < 2 {
+
+    let names = match read_names() {
+        Ok(names) => names,
+        Err(message) => {
+            eprintln!("{message}");
+            return;
+        }
+    };
+
+    if names.len() < 2 {
         eprintln!("You need at least 2 people for a Secret Santa.");
         return;
     }
-    list_of_people.shuffle(&mut rand::rng());
-    assign_all_secret_santas(&mut list_of_people);
-    println!();
-    println!("Assigned people: ");
-    println!("{}", "-".repeat(50));
-    for p in &list_of_people {
-        println!("{} -> {}", p.name, p.giving_to.as_ref().unwrap());
-    }
+
+    let assignments = assign_secret_santas(&names);
+    reveal_assignments(&assignments);
 }
 
-fn get_all_people_input(keyword: &str, lst: &mut Vec<Person>) -> bool {
+fn read_names() -> Result<Vec<String>, String> {
+    let stdin = io::stdin();
+    let mut reader = stdin.lock();
+    read_names_from(&mut reader)
+}
+
+fn read_names_from<R: BufRead>(reader: &mut R) -> Result<Vec<String>, String> {
+    let mut names: Vec<String> = Vec::new();
+    let mut line = String::new();
+
     loop {
-        let mut person: String = String::new();
-        io::stdin()
-            .read_line(&mut person)
-            .expect("Failed to read line.");
+        line.clear();
+        let bytes_read = reader
+            .read_line(&mut line)
+            .map_err(|error| format!("Failed to read line: {error}"))?;
 
-        let name = person.trim();
-        if name == keyword {
-            return true;
-        } else if name.is_empty() {
-            return false;
+        if bytes_read == 0 {
+            break;
         }
-        lst.push(convert_str_to_person(name.to_string()));
+
+        let name = line.trim();
+        if name.is_empty() {
+            println!("Ignoring empty name.");
+            continue;
+        }
+        if name.eq_ignore_ascii_case(END_KEYWORD) {
+            break;
+        }
+        if names
+            .iter()
+            .any(|existing| existing.eq_ignore_ascii_case(name))
+        {
+            return Err(format!(
+                "The name \"{name}\" was entered more than once. Names must be unique."
+            ));
+        }
+
+        names.push(name.to_string());
+    }
+
+    Ok(names)
+}
+
+fn assign_secret_santas(names: &[String]) -> Vec<(String, String)> {
+    let mut givers: Vec<&String> = names.iter().collect();
+    givers.shuffle(&mut rand::rng());
+
+    givers
+        .iter()
+        .enumerate()
+        .map(|(index, giver)| {
+            let recipient = givers[(index + 1) % givers.len()];
+            ((*giver).clone(), recipient.clone())
+        })
+        .collect()
+}
+
+fn reveal_assignments(assignments: &[(String, String)]) {
+    println!();
+    println!("Assignments are ready.");
+    println!("Pass the computer to each person in turn.");
+    println!("Only that person's recipient will be shown.");
+    wait_for_enter("Press Enter to start.");
+
+    for (giver, recipient) in assignments {
+        clear_screen();
+        println!("Pass the computer to {giver}.");
+        wait_for_enter("Press Enter when they are ready to see their recipient.");
+
+        clear_screen();
+        println!();
+        println!("{giver}, your Secret Santa recipient is:");
+        println!();
+        println!("    {recipient}");
+        println!();
+        wait_for_enter("Press Enter to hide this and pass the computer on.");
+    }
+
+    clear_screen();
+    println!("All assignments have been revealed. Have fun!");
+}
+
+fn wait_for_enter(prompt: &str) {
+    print!("{prompt} ");
+    io::stdout().flush().expect("Failed to flush stdout.");
+    let mut line = String::new();
+    let _ = io::stdin().read_line(&mut line);
+}
+
+fn clear_screen() {
+    #[cfg(windows)]
+    {
+        let _ = std::process::Command::new("cmd")
+            .args(["/C", "cls"])
+            .status();
+    }
+    #[cfg(not(windows))]
+    {
+        print!("\x1b[2J\x1b[3J\x1b[H");
+        io::stdout().flush().expect("Failed to flush stdout.");
     }
 }
 
-fn convert_str_to_person(person_str: String) -> Person {
-    Person {
-        name: person_str,
-        giving_to: None,
-    }
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::{HashMap, HashSet};
 
-fn assign_all_secret_santas(lst: &mut Vec<Person>) {
-    let n = lst.len();
-    for i in 0..n {
-        lst[i].giving_to = Some(lst[(i + 1) % n].name.clone());
+    fn names(count: usize) -> Vec<String> {
+        (0..count).map(|index| format!("Person{index}")).collect()
+    }
+
+    #[test]
+    fn reads_names_until_end_case_insensitively() {
+        let input = b"Alice\n\n  Bob  \nend\nCarol\n";
+        let names = read_names_from(&mut &input[..]).unwrap();
+
+        assert_eq!(names, vec!["Alice", "Bob"]);
+    }
+
+    #[test]
+    fn eof_finishes_input() {
+        let input = b"Alice\nBob\n";
+        let names = read_names_from(&mut &input[..]).unwrap();
+
+        assert_eq!(names, vec!["Alice", "Bob"]);
+    }
+
+    #[test]
+    fn rejects_duplicate_names_case_insensitively() {
+        let input = b"Alice\nalice\nEND\n";
+        let error = read_names_from(&mut &input[..]).unwrap_err();
+
+        assert!(error.contains("more than once"));
+    }
+
+    #[test]
+    fn assigns_one_to_one_without_self_assignment() {
+        for count in 2..=10 {
+            for _ in 0..200 {
+                let people = names(count);
+                let assignments = assign_secret_santas(&people);
+
+                assert_eq!(assignments.len(), count);
+
+                let mut recipient_by_giver: HashMap<String, String> = HashMap::new();
+                for (giver, recipient) in &assignments {
+                    assert_ne!(giver, recipient);
+                    assert!(
+                        recipient_by_giver
+                            .insert(giver.clone(), recipient.clone())
+                            .is_none()
+                    );
+                }
+
+                let unique_recipients: HashSet<&String> =
+                    assignments.iter().map(|(_, recipient)| recipient).collect();
+                assert_eq!(unique_recipients.len(), count);
+            }
+        }
+    }
+
+    #[test]
+    fn assignment_is_a_single_cycle() {
+        for count in 2..=10 {
+            for _ in 0..200 {
+                let people = names(count);
+                let assignments = assign_secret_santas(&people);
+                let recipient_by_giver: HashMap<String, String> = assignments.into_iter().collect();
+
+                let start = people[0].clone();
+                let mut current = start.clone();
+                for _ in 0..count - 1 {
+                    current = recipient_by_giver
+                        .get(&current)
+                        .expect("every giver should have a recipient")
+                        .clone();
+                }
+
+                assert_eq!(recipient_by_giver.get(&current), Some(&start));
+            }
+        }
+    }
+
+    #[test]
+    fn two_people_swap() {
+        let people = names(2);
+        let assignments: HashMap<String, String> =
+            assign_secret_santas(&people).into_iter().collect();
+
+        assert_eq!(assignments.get("Person0"), Some(&"Person1".to_string()));
+        assert_eq!(assignments.get("Person1"), Some(&"Person0".to_string()));
     }
 }

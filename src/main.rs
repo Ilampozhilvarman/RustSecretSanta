@@ -30,6 +30,9 @@ fn main() {
     }
     list_of_people.shuffle(&mut rand::rng());
     assign_all_secret_santas(&mut list_of_people);
+    println!();
+    println!("Assigned people: ");
+    println!("{}", "-".repeat(50));
     for p in &list_of_people {
         println!("{} -> {}", p.name, p.giving_to.as_ref().unwrap());
     }
